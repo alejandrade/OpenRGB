@@ -229,6 +229,14 @@ private:
     std::vector<PreDetectionHookFunction>       pre_detection_hooks;
 
     /*-----------------------------------------------------*\
+    | HID Hotplug handles                                   |
+    \*-----------------------------------------------------*/
+#if(HID_HOTPLUG_ENABLED)
+    hid_hotplug_callback_handle                 hotplug_callback_handle;
+    hid_hotplug_callback_handle                 libusb_hotplug_callback_handle;
+#endif
+
+    /*-----------------------------------------------------*\
     | Detection Callbacks                                   |
     \*-----------------------------------------------------*/
     std::vector<DetectionCallback>              DetectionCallbacks;
@@ -302,6 +310,15 @@ private:
     bool ProcessPreDetection();
     void ProcessPreDetectionHooks();
     void UpdateDetectorSettings();
+
+    /*-----------------------------------------------------*\
+    | HID Hotplug Callback functions                        |
+    \*-----------------------------------------------------*/
+#if(HID_HOTPLUG_ENABLED)
+    static int HotplugCallbackFunction(hid_hotplug_callback_handle callback_handle, hid_device_info *device, hid_hotplug_event event, void *user_data);
+    static int HotplugLibusbCallbackFunction(hid_hotplug_callback_handle callback_handle, hid_device_info *device, hid_hotplug_event event, void *user_data);
+    static int UnplugCallbackFunction(hid_hotplug_callback_handle callback_handle, hid_device_info *device, hid_hotplug_event event, void *user_data);
+#endif
 
     /*-----------------------------------------------------*\
     | Function for signalling DetectionManager updates to   |

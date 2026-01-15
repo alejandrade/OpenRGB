@@ -76,14 +76,18 @@ const char* UDEV_MUTLI =    QT_TRANSLATE_NOOP("DetectionManager",
 const hidapi_wrapper default_hidapi_wrapper =
 {
     NULL,
-    (hidapi_wrapper_send_feature_report)        hid_send_feature_report,
-    (hidapi_wrapper_get_feature_report)         hid_get_feature_report,
-    (hidapi_wrapper_get_serial_number_string)   hid_get_serial_number_string,
-    (hidapi_wrapper_open_path)                  hid_open_path,
-    (hidapi_wrapper_enumerate)                  hid_enumerate,
-    (hidapi_wrapper_free_enumeration)           hid_free_enumeration,
-    (hidapi_wrapper_close)                      hid_close,
-    (hidapi_wrapper_error)                      hid_error
+    (hidapi_wrapper_send_feature_report)            hid_send_feature_report,
+    (hidapi_wrapper_get_feature_report)             hid_get_feature_report,
+    (hidapi_wrapper_get_serial_number_string)       hid_get_serial_number_string,
+    (hidapi_wrapper_open_path)                      hid_open_path,
+    (hidapi_wrapper_enumerate)                      hid_enumerate,
+    (hidapi_wrapper_free_enumeration)               hid_free_enumeration,
+    (hidapi_wrapper_close)                          hid_close,
+    (hidapi_wrapper_error)                          hid_error,
+#if(HID_HOTPLUG_ENABLED)
+    (hidapi_wrapper_hotplug_register_callback)      hid_hotplug_register_callback,
+    (hidapi_wrapper_hotplug_deregister_callback)    hid_hotplug_deregister_callback,
+#endif
 };
 
 /*---------------------------------------------------------*\
@@ -711,7 +715,11 @@ void DetectionManager::BackgroundDetectDevices()
     }
     else
     {
+#if(HID_HOTPLUG_ENABLED)
+        hid_hotplug_register_callback(0, 0, HID_API_HOTPLUG_EVENT_DEVICE_ARRIVED, HID_API_HOTPLUG_ENUMERATE, &DetectionManager::HotplugCallbackFunction, nullptr, &hotplug_callback_handle);
+#else
         BackgroundDetectHIDDevices(hid_devices, detector_settings);
+#endif
     }
 
     /*-----------------------------------------------------*\
@@ -1154,15 +1162,19 @@ void DetectionManager::BackgroundDetectHIDDevicesWrapped(hid_device_info* hid_de
         \*-------------------------------------------------*/
         wrapper =
         {
-            .dyn_handle                     = dyn_handle,
-            .hid_send_feature_report        = (hidapi_wrapper_send_feature_report)          dlsym(dyn_handle,"hid_send_feature_report"),
-            .hid_get_feature_report         = (hidapi_wrapper_get_feature_report)           dlsym(dyn_handle,"hid_get_feature_report"),
-            .hid_get_serial_number_string   = (hidapi_wrapper_get_serial_number_string)     dlsym(dyn_handle,"hid_get_serial_number_string"),
-            .hid_open_path                  = (hidapi_wrapper_open_path)                    dlsym(dyn_handle,"hid_open_path"),
-            .hid_enumerate                  = (hidapi_wrapper_enumerate)                    dlsym(dyn_handle,"hid_enumerate"),
-            .hid_free_enumeration           = (hidapi_wrapper_free_enumeration)             dlsym(dyn_handle,"hid_free_enumeration"),
-            .hid_close                      = (hidapi_wrapper_close)                        dlsym(dyn_handle,"hid_close"),
-            .hid_error                      = (hidapi_wrapper_error)                        dlsym(dyn_handle,"hid_free_enumeration")
+            .dyn_handle                         = dyn_handle,
+            .hid_send_feature_report            = (hidapi_wrapper_send_feature_report)          dlsym(dyn_handle,"hid_send_feature_report"),
+            .hid_get_feature_report             = (hidapi_wrapper_get_feature_report)           dlsym(dyn_handle,"hid_get_feature_report"),
+            .hid_get_serial_number_string       = (hidapi_wrapper_get_serial_number_string)     dlsym(dyn_handle,"hid_get_serial_number_string"),
+            .hid_open_path                      = (hidapi_wrapper_open_path)                    dlsym(dyn_handle,"hid_open_path"),
+            .hid_enumerate                      = (hidapi_wrapper_enumerate)                    dlsym(dyn_handle,"hid_enumerate"),
+            .hid_free_enumeration               = (hidapi_wrapper_free_enumeration)             dlsym(dyn_handle,"hid_free_enumeration"),
+            .hid_close                          = (hidapi_wrapper_close)                        dlsym(dyn_handle,"hid_close"),
+            .hid_error                          = (hidapi_wrapper_error)                        dlsym(dyn_handle,"hid_free_enumeration"),
+#if(HID_HOTPLUG_ENABLED)
+            .hid_hotplug_register_callback      = (hidapi_wrapper_hotplug_register_callback)    dlsym(dyn_handle,"hid_hotplug_register_callback"),
+            .hid_hotplug_deregister_callback    = (hidapi_wrapper_hotplug_deregister_callback)  dlsym(dyn_handle,"hid_hotplug_deregister_callback"),
+#endif
         };
 
         hid_devices                         = wrapper.hid_enumerate(0, 0);
@@ -1320,6 +1332,10 @@ void DetectionManager::RunHIDDetector(hid_device_info* current_hid_device, json 
 
                 for(std::size_t detected_controller_idx = 0; detected_controller_idx < detected_controllers.size(); detected_controller_idx++)
                 {
+#if(HID_HOTPLUG_ENABLED)
+                    int handle;
+                    hid_hotplug_register_callback(current_hid_device->vendor_id, current_hid_device->product_id, HID_API_HOTPLUG_EVENT_DEVICE_LEFT, 0, &DetectionManager::UnplugCallbackFunction, detected_controllers[detected_controller_idx], &handle);
+#endif
                     RegisterRGBController(detected_controllers[detected_controller_idx]);
                 }
             }
@@ -1618,6 +1634,57 @@ void DetectionManager::UpdateDetectorSettings()
         ResourceManager::get()->GetSettingsManager()->SaveSettings();
     }
 }
+
+/*---------------------------------------------------------*\
+| HID Hotplug Callback functions                            |
+\*---------------------------------------------------------*/
+#if(HID_HOTPLUG_ENABLED)
+int DetectionManager::HotplugCallbackFunction(hid_hotplug_callback_handle callback_handle, hid_device_info *device, hid_hotplug_event event, void *user_data)
+{
+    /*-----------------------------------------------------*\
+    | Open device disable list and read in disabled         |
+    | device strings                                        |
+    \*-----------------------------------------------------*/
+    json                detector_settings   = ResourceManager::get()->GetSettingsManager()->GetSettings("Detectors");
+    DetectionManager*   dm                  = DetectionManager::get();
+
+    if(event == HID_API_HOTPLUG_EVENT_DEVICE_ARRIVED)
+    {
+        LOG_INFO("[%s] HID device connected: [%04x:%04x]", DETECTIONMANAGER, device->vendor_id, device->product_id);
+
+        dm->RunHIDDetector(device, detector_settings);
+        dm->RunHIDWrappedDetector(&default_hidapi_wrapper, device, detector_settings);
+    }
+
+    return 0;
+}
+
+int DetectionManager::UnplugCallbackFunction(hid_hotplug_callback_handle callback_handle, hid_device_info *device, hid_hotplug_event event, void *user_data)
+{
+    DetectionManager* dm = DetectionManager::get();
+
+    if(event == HID_API_HOTPLUG_EVENT_DEVICE_LEFT)
+    {
+        LOG_INFO("[%s] HID device disconnected: [%04x:%04x]", DETECTIONMANAGER, device->vendor_id, device->product_id);
+
+        std::string location = "HID: ";
+        location.append(device->path);
+
+        // User data is the pointer to the controller being removed
+        RGBController* controller = (RGBController*)(user_data);
+
+        LOG_DEBUG("Checking device location:\"%s\":\"%s\"", location.c_str(), controller->location.c_str());
+
+        if(controller && controller->location == location)
+        {
+            dm->UnregisterRGBController(controller);
+            delete controller;
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif
 
 /*---------------------------------------------------------*\
 | Function for signalling DetectionManager updates to       |
