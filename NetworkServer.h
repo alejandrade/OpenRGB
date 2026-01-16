@@ -62,6 +62,12 @@ public:
     std::string     client_ip;
 };
 
+typedef struct
+{
+    RGBController * controller;
+    unsigned int    id;
+} NetworkControllerID;
+
 class NetworkServer
 {
 public:
@@ -79,6 +85,11 @@ public:
     const char *                        GetClientString(unsigned int client_num);
     const char *                        GetClientIP(unsigned int client_num);
     unsigned int                        GetClientProtocolVersion(unsigned int client_num);
+
+    /*-----------------------------------------------------*\
+    | Signal that device list has been updated              |
+    \*-----------------------------------------------------*/
+    void                                DeviceListUpdated();
 
     /*-----------------------------------------------------*\
     | Callback functions                                    |
@@ -131,6 +142,9 @@ private:
     /*-----------------------------------------------------*\
     | Server controller list                                |
     \*-----------------------------------------------------*/
+    std::vector<NetworkControllerID>                controller_ids;
+    std::shared_mutex                               controller_ids_mutex;
+    unsigned int                                    controller_next_idx;
     std::vector<RGBController *>&                   controllers;
     std::vector<NetworkServerControllerThread *>    controller_threads;
 
@@ -201,7 +215,7 @@ private:
     void                                ProcessRequest_RGBController_UpdateZoneLEDs(std::size_t controller_idx, unsigned char* data_ptr);
     void                                ProcessRequest_RGBController_UpdateZoneMode(std::size_t controller_idx, unsigned char * data_ptr, unsigned int protocol_version);
 
-    void                                SendReply_ControllerCount(SOCKET client_sock);
+    void                                SendReply_ControllerCount(SOCKET client_sock, unsigned int protocol_version);
     void                                SendReply_ControllerData(SOCKET client_sock, unsigned int dev_idx, unsigned int protocol_version);
     void                                SendReply_ProtocolVersion(SOCKET client_sock);
     void                                SendReply_ServerString(SOCKET client_sock);

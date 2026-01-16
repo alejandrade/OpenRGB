@@ -132,8 +132,9 @@ private:
     bool                                controller_data_received;
     bool                                controller_data_requested;
     bool                                protocol_initialized;
+    unsigned int                        protocol_version;
     bool                                change_in_progress;
-    unsigned int                        requested_controllers;
+    unsigned int                        requested_controller_index;
     std::mutex                          send_in_progress;
 
     NetPacketHeader                     response_header;
@@ -157,9 +158,8 @@ private:
     bool                                server_connected;
     bool                                server_initialized;
     bool                                server_reinitialize;
-    unsigned int                        server_controller_count;
-    bool                                server_controller_count_requested;
-    bool                                server_controller_count_received;
+    bool                                server_controller_ids_requested;
+    bool                                server_controller_ids_received;
     unsigned int                        server_protocol_version;
     bool                                server_protocol_version_received;
 
@@ -183,6 +183,7 @@ private:
     \*-----------------------------------------------------*/
     std::mutex                          ControllerListMutex;
     std::vector<RGBController *>        server_controllers;
+    std::vector<unsigned int>           server_controller_ids;
 
     /*-----------------------------------------------------*\
     | Detection variables                                   |
@@ -204,8 +205,8 @@ private:
     /*-----------------------------------------------------*\
     | Private Client functions                              |
     \*-----------------------------------------------------*/
-    void                                ProcessReply_ControllerCount(unsigned int data_size, char * data);
     void                                ProcessReply_ControllerData(unsigned int data_size, char * data, unsigned int dev_idx);
+    void                                ProcessReply_ControllerIDs(unsigned int data_size, char * data_ptr);
     void                                ProcessReply_ProtocolVersion(unsigned int data_size, char * data);
     void                                ProcessRequest_DetectionProgressChanged(unsigned int data_size, char * data);
     void                                ProcessRequest_DeviceListChanged();
@@ -213,7 +214,7 @@ private:
     void                                ProcessRequest_ServerString(unsigned int data_size, char * data);
 
     void                                SendData_ClientString();
-    void                                SendRequest_ControllerCount();
+    void                                SendRequest_ControllerIDs();
     void                                SendRequest_ProtocolVersion();
 
     /*-----------------------------------------------------*\

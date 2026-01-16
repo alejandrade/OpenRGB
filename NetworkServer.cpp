@@ -77,6 +77,8 @@ NetworkServer::NetworkServer(std::vector<RGBController *>& control) : controller
     server_listening            = false;
     legacy_workaround_enabled   = false;
 
+    controller_next_idx         = 0;
+
     for(int i = 0; i < MAXSOCK; i++)
     {
         ConnectionThread[i]     = nullptr;
@@ -85,6 +87,8 @@ NetworkServer::NetworkServer(std::vector<RGBController *>& control) : controller
     plugin_manager              = nullptr;
     profile_manager             = nullptr;
     settings_manager            = nullptr;
+
+    DeviceListUpdated();
 }
 
 NetworkServer::~NetworkServer()
@@ -190,6 +194,95 @@ unsigned int NetworkServer::GetClientProtocolVersion(unsigned int client_num)
 }
 
 /*---------------------------------------------------------*\
+| Signal that device list has been updated                  |
+\*---------------------------------------------------------*/
+void NetworkServer::DeviceListUpdated()
+{
+    controller_ids_mutex.lock();
+
+    /*-----------------------------------------------------*\
+    | Look for removed controllers and remove their ID      |
+    | entries                                               |
+    \*-----------------------------------------------------*/
+    std::size_t controller_id_idx = 0;
+
+    while(controller_id_idx < controller_ids.size())
+    {
+        /*-------------------------------------------------*\
+        | Check to see if there is a controller matching    |
+        | this ID                                           |
+        \*-------------------------------------------------*/
+        bool match = false;
+
+        for(std::size_t controller_idx = 0; controller_idx < controllers.size(); controller_idx++)
+        {
+            if(controllers[controller_idx] == controller_ids[controller_id_idx].controller)
+            {
+                match = true;
+                break;
+            }
+        }
+
+        /*-------------------------------------------------*\
+        | If it does not match, that means the controller   |
+        | has been removed, so we should remove its ID      |
+        \*-------------------------------------------------*/
+        if(!match)
+        {
+            controller_ids.erase(controller_ids.begin() + controller_id_idx);
+        }
+        else
+        {
+            controller_id_idx++;
+        }
+    }
+
+    /*-----------------------------------------------------*\
+    | Create new controller IDs for newly added controllers |
+    \*-----------------------------------------------------*/
+    for(std::size_t controller_idx = 0; controller_idx < controllers.size(); controller_idx++)
+    {
+        /*-------------------------------------------------*\
+        | Check to see if this controller already has an ID |
+        \*-------------------------------------------------*/
+        bool match = false;
+
+        for(std::size_t controller_id_idx = 0; controller_id_idx < controller_ids.size(); controller_id_idx++)
+        {
+            if(controllers[controller_idx] == controller_ids[controller_id_idx].controller)
+            {
+                match = true;
+                break;
+            }
+        }
+
+        /*-------------------------------------------------*\
+        | If not, create a new ID for this controller       |
+        \*-------------------------------------------------*/
+        if(!match)
+        {
+            NetworkControllerID new_controller_id;
+
+            new_controller_id.controller    = controllers[controller_idx];
+            new_controller_id.id            = controller_next_idx;
+
+            controller_next_idx++;
+
+            controller_ids.push_back(new_controller_id);
+        }
+    }
+
+    printf("Server IDs: ");
+    for(std::size_t controller_id_idx = 0; controller_id_idx < controller_ids.size(); controller_id_idx++)
+    {
+        printf("%d, ", controller_ids[controller_id_idx].id);
+    }
+    printf("\r\n");
+
+    controller_ids_mutex.unlock();
+}
+
+/*---------------------------------------------------------*\
 | Callback functions                                        |
 \*---------------------------------------------------------*/
 void NetworkServer::SignalResourceManagerUpdate(unsigned int update_reason)
@@ -197,6 +290,7 @@ void NetworkServer::SignalResourceManagerUpdate(unsigned int update_reason)
     switch(update_reason)
     {
         case RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED:
+            DeviceListUpdated();
             SignalDeviceListUpdated();
             break;
 
@@ -776,7 +870,7 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
         | Network requests                                  |
         \*-------------------------------------------------*/
             case NET_PACKET_ID_REQUEST_CONTROLLER_COUNT:
-                SendReply_ControllerCount(client_sock);
+                SendReply_ControllerCount(client_sock, client_info->client_protocol_version);
                 break;
 
             case NET_PACKET_ID_REQUEST_CONTROLLER_DATA:
@@ -1505,19 +1599,55 @@ void NetworkServer::ProcessRequest_RGBController_UpdateZoneMode(std::size_t cont
     controllers[controller_idx]->UpdateZoneMode(zone_idx);
 }
 
-void NetworkServer::SendReply_ControllerCount(SOCKET client_sock)
+void NetworkServer::SendReply_ControllerCount(SOCKET client_sock, unsigned int protocol_version)
 {
+    controller_ids_mutex.lock_shared();
+
     NetPacketHeader reply_hdr;
-    unsigned int    reply_data;
+    unsigned int    controller_count    = (unsigned int)controller_ids.size();
+    unsigned int    data_size           = 0;
 
-    InitNetPacketHeader(&reply_hdr, 0, NET_PACKET_ID_REQUEST_CONTROLLER_COUNT, sizeof(unsigned int));
+    /*-----------------------------------------------------*\
+    | Determine data size                                   |
+    \*-----------------------------------------------------*/
+    data_size                          += sizeof(controller_count);
 
-    reply_data = (unsigned int)controllers.size();
+    /*-----------------------------------------------------*\
+    | Starting with protocol > 6, a list of controller IDs  |
+    | is sent in addition to the size                       |
+    \*-----------------------------------------------------*/
+    if(protocol_version >= 6)
+    {
+        data_size                      += (controller_count * sizeof(unsigned int));
+    }
+
+    unsigned char * data_buf            = new unsigned char[data_size];
+    unsigned char * data_ptr            = data_buf;
+
+    memcpy(data_ptr, &controller_count, sizeof(controller_count));
+    data_ptr += sizeof(controller_count);
+
+    if(protocol_version >= 6)
+    {
+        for(unsigned int controller_id_idx = 0; controller_id_idx < controller_count; controller_id_idx++)
+        {
+            memcpy(data_ptr, &controller_ids[controller_id_idx].id, sizeof(controller_ids[controller_id_idx].id));
+            data_ptr += sizeof(controller_ids[controller_id_idx].id);
+        }
+    }
+
+    controller_ids_mutex.unlock_shared();
+
+    InitNetPacketHeader(&reply_hdr, 0, NET_PACKET_ID_REQUEST_CONTROLLER_COUNT, data_size);
+
+    controller_count = (unsigned int)controllers.size();
 
     send_in_progress.lock();
     send(client_sock, (const char *)&reply_hdr, sizeof(NetPacketHeader), 0);
-    send(client_sock, (const char *)&reply_data, sizeof(unsigned int), 0);
+    send(client_sock, (const char *)data_buf, data_size, 0);
     send_in_progress.unlock();
+
+    delete[] data_buf;
 }
 
 void NetworkServer::SendReply_ControllerData(SOCKET client_sock, unsigned int dev_idx, unsigned int protocol_version)
