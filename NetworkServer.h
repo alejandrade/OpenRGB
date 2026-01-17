@@ -216,7 +216,7 @@ private:
     void                                ProcessRequest_RGBController_UpdateZoneMode(std::size_t controller_idx, unsigned char * data_ptr, unsigned int protocol_version);
 
     void                                SendReply_ControllerCount(SOCKET client_sock, unsigned int protocol_version);
-    void                                SendReply_ControllerData(SOCKET client_sock, unsigned int dev_idx, unsigned int protocol_version);
+    void                                SendReply_ControllerData(SOCKET client_sock, unsigned int dev_id, unsigned int protocol_version);
     void                                SendReply_ProtocolVersion(SOCKET client_sock);
     void                                SendReply_ServerString(SOCKET client_sock);
 
@@ -233,5 +233,6 @@ private:
     | Private helper functions                              |
     \*-----------------------------------------------------*/
     int                                 accept_select(int sockfd);
+    unsigned int                        index_from_id(unsigned int id, unsigned int protocol_version, bool* index_valid);
     int                                 recv_select(SOCKET s, char *buf, int len, int flags);
 };

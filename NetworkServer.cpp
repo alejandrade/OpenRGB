@@ -201,6 +201,58 @@ void NetworkServer::DeviceListUpdated()
     controller_ids_mutex.lock();
 
     /*-----------------------------------------------------*\
+    | Create a copy of the current controller IDs list      |
+    \*-----------------------------------------------------*/
+    std::vector<NetworkControllerID>    controller_ids_old   = controller_ids;
+
+    /*-----------------------------------------------------*\
+    | Clear the current controller IDs list                 |
+    \*-----------------------------------------------------*/
+    controller_ids.clear();
+
+    /*-----------------------------------------------------*\
+    | Resize controller IDs list to be the same size as the |
+    | controllers list                                      |
+    \*-----------------------------------------------------*/
+    controller_ids.resize(controllers.size());
+
+    /*-----------------------------------------------------*\
+    | Loop through the controllers list and find the ID for |
+    | each controller, adding it to the IDs list.           |
+    \*-----------------------------------------------------*/
+    for(std::size_t controller_idx = 0; controller_idx < controller_ids.size(); controller_idx++)
+    {
+        bool match                                          = false;
+        for(std::size_t controller_id_idx = 0; controller_id_idx < controller_ids_old.size(); controller_id_idx++)
+        {
+            if(controllers[controller_idx] == controller_ids_old[controller_id_idx].controller)
+            {
+                controller_ids[controller_idx]              = controller_ids_old[controller_id_idx];
+                match                                       = true;
+
+                break;
+            }
+        }
+
+        /*-------------------------------------------------*\
+        | If an ID does not already exist, create a new ID  |
+        | for this controller                               |
+        \*-------------------------------------------------*/
+        if(!match)
+        {
+            NetworkControllerID new_controller_id;
+
+            new_controller_id.controller                    = controllers[controller_idx];
+            new_controller_id.id                            = controller_next_idx;
+
+            controller_next_idx++;
+
+            controller_ids[controller_idx]                  = new_controller_id;
+        }
+    }
+
+#if 0
+    /*-----------------------------------------------------*\
     | Look for removed controllers and remove their ID      |
     | entries                                               |
     \*-----------------------------------------------------*/
@@ -271,7 +323,7 @@ void NetworkServer::DeviceListUpdated()
             controller_ids.push_back(new_controller_id);
         }
     }
-
+#endif
     printf("Server IDs: ");
     for(std::size_t controller_id_idx = 0; controller_id_idx < controller_ids.size(); controller_id_idx++)
     {
@@ -824,7 +876,7 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
         {
             int tmp_bytes_read = 0;
 
-            tmp_bytes_read = recv_select(client_sock, (char *)&header.pkt_dev_idx + bytes_read, sizeof(header) - sizeof(header.pkt_magic) - bytes_read, 0);
+            tmp_bytes_read = recv_select(client_sock, (char *)&header.pkt_dev_id + bytes_read, sizeof(header) - sizeof(header.pkt_magic) - bytes_read, 0);
 
             bytes_read += tmp_bytes_read;
 
@@ -875,14 +927,27 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
 
             case NET_PACKET_ID_REQUEST_CONTROLLER_DATA:
                 {
-                    unsigned int protocol_version = 0;
-
-                    if(header.pkt_size == sizeof(unsigned int))
+                    /*-------------------------------------*\
+                    | Protocol versions < 6 sent the client |
+                    | protocol version with this request,   |
+                    | versions 6+ use the stored negotiated |
+                    | protocol version instead.             |
+                    \*-------------------------------------*/
+                    if(client_info->client_protocol_version < 6)
                     {
-                        memcpy(&protocol_version, data, sizeof(unsigned int));
-                    }
+                        unsigned int protocol_version = 0;
 
-                    SendReply_ControllerData(client_sock, header.pkt_dev_idx, protocol_version);
+                        if(header.pkt_size == sizeof(unsigned int))
+                        {
+                            memcpy(&protocol_version, data, sizeof(unsigned int));
+                        }
+
+                        SendReply_ControllerData(client_sock, header.pkt_dev_id, protocol_version);
+                    }
+                    else
+                    {
+                        SendReply_ControllerData(client_sock, header.pkt_dev_id, client_info->client_protocol_version);
+                    }
                 }
                 break;
 
@@ -1026,7 +1091,7 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                     unsigned int    plugin_pkt_id   = *((unsigned int*)(data));
                     unsigned int    plugin_pkt_size = header.pkt_size - (sizeof(unsigned int));
                     unsigned char*  plugin_data     = (unsigned char*)(data + sizeof(unsigned int));
-                    unsigned char*  output          = plugin_manager->OnSDKCommand(header.pkt_dev_idx, plugin_pkt_id, plugin_data, &plugin_pkt_size);
+                    unsigned char*  output          = plugin_manager->OnSDKCommand(header.pkt_dev_id, plugin_pkt_id, plugin_data, &plugin_pkt_size);
 
                     if(output != nullptr)
                     {
@@ -1094,7 +1159,7 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                     break;
                 }
 
-                if((header.pkt_dev_idx < controllers.size()) && (header.pkt_size == (2 * sizeof(int))))
+                if((header.pkt_dev_id < controllers.size()) && (header.pkt_size == (2 * sizeof(int))))
                 {
                     int zone;
                     int new_size;
@@ -1102,7 +1167,7 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                     memcpy(&zone, data, sizeof(int));
                     memcpy(&new_size, data + sizeof(int), sizeof(int));
 
-                    controllers[header.pkt_dev_idx]->ResizeZone(zone, new_size);
+                    controllers[header.pkt_dev_id]->ResizeZone(zone, new_size);
                     profile_manager->SaveSizes();
                 }
                 break;
@@ -1133,7 +1198,7 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                 || ((client_info->client_protocol_version <= 4)
                  && (legacy_workaround_enabled)))
                 {
-                    if(header.pkt_dev_idx < controllers.size())
+                    if(header.pkt_dev_id < controllers.size())
                     {
                         if(controller_threads.size() < controllers.size())
                         {
@@ -1149,16 +1214,16 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                             }
                         }
 
-                        controller_threads[header.pkt_dev_idx]->queue_mutex.lock();
+                        controller_threads[header.pkt_dev_id]->queue_mutex.lock();
                         NetworkServerControllerThreadQueueEntry new_entry;
                         new_entry.data                      = data;
                         new_entry.id                        = header.pkt_id;
                         new_entry.size                      = header.pkt_size;
                         new_entry.client_protocol_version   = client_info->client_protocol_version;
-                        controller_threads[header.pkt_dev_idx]->queue.push(new_entry);
-                        controller_threads[header.pkt_dev_idx]->queue_mutex.unlock();
+                        controller_threads[header.pkt_dev_id]->queue.push(new_entry);
+                        controller_threads[header.pkt_dev_id]->queue_mutex.unlock();
 
-                        controller_threads[header.pkt_dev_idx]->start_cv.notify_all();
+                        controller_threads[header.pkt_dev_id]->start_cv.notify_all();
 
                         delete_data = false;
                     }
@@ -1183,9 +1248,9 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                 \*-----------------------------------------*/
                 if(header.pkt_size == (sizeof(int) + sizeof(RGBColor)))
                 {
-                    if(header.pkt_dev_idx < controllers.size())
+                    if(header.pkt_dev_id < controllers.size())
                     {
-                        ProcessRequest_RGBController_UpdateSingleLED(header.pkt_dev_idx, (unsigned char *)data);
+                        ProcessRequest_RGBController_UpdateSingleLED(header.pkt_dev_id, (unsigned char *)data);
                     }
                 }
                 else
@@ -1196,9 +1261,9 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                 break;
 
             case NET_PACKET_ID_RGBCONTROLLER_SETCUSTOMMODE:
-                if(header.pkt_dev_idx < controllers.size())
+                if(header.pkt_dev_id < controllers.size())
                 {
-                    controllers[header.pkt_dev_idx]->SetCustomMode();
+                    controllers[header.pkt_dev_id]->SetCustomMode();
                 }
                 break;
 
@@ -1208,13 +1273,13 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                     break;
                 }
 
-                if((header.pkt_dev_idx < controllers.size()) && (header.pkt_size == sizeof(int)))
+                if((header.pkt_dev_id < controllers.size()) && (header.pkt_size == sizeof(int)))
                 {
                     int zone;
 
                     memcpy(&zone, data, sizeof(int));
 
-                    controllers[header.pkt_dev_idx]->ClearSegments(zone);
+                    controllers[header.pkt_dev_id]->ClearSegments(zone);
                     profile_manager->SaveSizes();
                 }
                 break;
@@ -1228,9 +1293,9 @@ void NetworkServer::ListenThreadFunction(NetworkClientInfo * client_info)
                     \*-------------------------------------*/
                     if(header.pkt_size == *((unsigned int*)data))
                     {
-                        if(header.pkt_dev_idx < controllers.size())
+                        if(header.pkt_dev_id < controllers.size())
                         {
-                            ProcessRequest_RGBController_AddSegment(header.pkt_dev_idx, (unsigned char *)data, client_info->client_protocol_version);
+                            ProcessRequest_RGBController_AddSegment(header.pkt_dev_id, (unsigned char *)data, client_info->client_protocol_version);
                             profile_manager->SaveSizes();
                         }
                     }
@@ -1650,9 +1715,15 @@ void NetworkServer::SendReply_ControllerCount(SOCKET client_sock, unsigned int p
     delete[] data_buf;
 }
 
-void NetworkServer::SendReply_ControllerData(SOCKET client_sock, unsigned int dev_idx, unsigned int protocol_version)
+void NetworkServer::SendReply_ControllerData(SOCKET client_sock, unsigned int dev_id, unsigned int protocol_version)
 {
-    if(dev_idx < controllers.size())
+    /*---------------------------------------------------------*\
+    | Convert ID to index                                       |
+    \*---------------------------------------------------------*/
+    bool            idx_valid;
+    unsigned int    dev_idx = index_from_id(dev_id, protocol_version, &idx_valid);
+
+    if(idx_valid && (dev_idx < controller_ids.size()))
     {
         NetPacketHeader reply_hdr;
         unsigned char * reply_data;
@@ -1694,7 +1765,7 @@ void NetworkServer::SendReply_ControllerData(SOCKET client_sock, unsigned int de
         /*-----------------------------------------------------*\
         | Initialize packet header                              |
         \*-----------------------------------------------------*/
-        InitNetPacketHeader(&reply_hdr, dev_idx, NET_PACKET_ID_REQUEST_CONTROLLER_DATA, reply_size);
+        InitNetPacketHeader(&reply_hdr, dev_id, NET_PACKET_ID_REQUEST_CONTROLLER_DATA, reply_size);
 
         /*-----------------------------------------------------*\
         | Send packet                                           |
@@ -2148,6 +2219,39 @@ int NetworkServer::accept_select(int sockfd)
             return(accept((int)sockfd, NULL, NULL));
         }
     }
+}
+
+unsigned int NetworkServer::index_from_id(unsigned int id, unsigned int protocol_version, bool* index_valid)
+{
+    /*-----------------------------------------------------*\
+    | For protocol < 6, the ID is the index                 |
+    \*-----------------------------------------------------*/
+    unsigned int index  = id;
+    *index_valid        = true;
+
+    /*-----------------------------------------------------*\
+    | For protocol >= 6, look up the ID from the index      |
+    \*-----------------------------------------------------*/
+    if(protocol_version >= 6)
+    {
+        controller_ids_mutex.lock_shared();
+
+        *index_valid = false;
+
+        for(std::size_t controller_id_idx = 0; controller_id_idx < controller_ids.size(); controller_id_idx++)
+        {
+            if(controller_ids[controller_id_idx].id == id)
+            {
+                index           = controller_id_idx;
+                *index_valid    = true;
+                break;
+            }
+        }
+
+        controller_ids_mutex.unlock_shared();
+    }
+
+    return(index);
 }
 
 int NetworkServer::recv_select(SOCKET s, char *buf, int len, int flags)
