@@ -32,7 +32,7 @@ void NVIDIAIlluminationV1Controller::checkNVAPIreturn()
 {
     if (nvapi_return != NVAPI_OK)
     {
-        LOG_DEBUG("NVAPI return code not NVAPI_OK: %d", nvapi_return);
+        LOG_WARNING("[%s] NVAPI return code not NVAPI_OK: %d", name.c_str(), nvapi_return);
     }
 }
 
