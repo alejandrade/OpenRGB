@@ -12,6 +12,7 @@
 #include <thread>
 #include <chrono>
 #include "RGBController_Alienware.h"
+#include "LogManager.h"
 
 /**------------------------------------------------------------------*\
     @name Alienware
