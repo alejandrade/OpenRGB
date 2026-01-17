@@ -32,7 +32,8 @@ static const std::map<alienware_platform_id, uint8_t> zone_quirks_table =
     { 0x0C01,   4 },    // Dell G5 SE 5505
     { 0x0A01,  16 },    // Dell G7 15 7500
     { 0x0E03,   4 },    // Dell G15   5511
-    { 0x0E0A,   4 }     // Dell G15   5530
+    { 0x0E0A,   4 },    // Dell G15   5530
+    { 0x0810,  71 }     // Alienware Aurora R16 - device reports 71 zones
 
 };
 
@@ -56,7 +57,16 @@ static void SendHIDReport(hid_device *dev, const unsigned char* usb_buf, size_t 
 {
     using namespace std::chrono_literals;
 
-    hid_send_feature_report(dev, usb_buf, usb_buf_size);
+    /*-----------------------------------------------------*\
+    | Log what we're sending for debugging                  |
+    \*-----------------------------------------------------*/
+    LOG_DEBUG("[%s] SendHIDReport: [%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X ...]",
+              ALIENWARE_CONTROLLER_NAME,
+              usb_buf[0], usb_buf[1], usb_buf[2], usb_buf[3], usb_buf[4],
+              usb_buf[5], usb_buf[6], usb_buf[7], usb_buf[8], usb_buf[9]);
+
+    int bytes_sent = hid_send_feature_report(dev, usb_buf, usb_buf_size);
+    LOG_DEBUG("[%s] SendHIDReport: bytes_sent=%d", ALIENWARE_CONTROLLER_NAME, bytes_sent);
 
     /*-----------------------------------------------------*\
     | The controller really doesn't like really spammed by  |
@@ -97,7 +107,8 @@ AlienwareController::AlienwareController(hid_device* dev_handle, const hid_devic
     | configuration                                         |
     \*-----------------------------------------------------*/
     report              = Report(ALIENWARE_COMMAND_REPORT_CONFIG);
-    alienware_platform_id platform_id = report.data[4] << 8 | report.data[5];
+
+    platform_id         = report.data[4] << 8 | report.data[5];
 
     /*-----------------------------------------------------*\
     | Check if the device reports the wrong number of zones |
@@ -121,12 +132,11 @@ AlienwareController::AlienwareController(hid_device* dev_handle, const hid_devic
 
     if(zone_names_table.count(platform_id))
     {
-        LOG_INFO("[%s] Known platform: %8X, Number of zones: %d", ALIENWARE_CONTROLLER_NAME, platform_id, number_of_zones);
         zone_names = zone_names_table.at(platform_id);
     }
     else
     {
-        LOG_WARNING("[%s] Unknown platform: %8X, Number of zones: %d", ALIENWARE_CONTROLLER_NAME, platform_id, number_of_zones);
+        LOG_WARNING("[%s] Unknown platform: 0x%04X, Number of zones: %d", ALIENWARE_CONTROLLER_NAME, platform_id, number_of_zones);
 
         /*-------------------------------------------------*\
         | If this is an unknown controller, set the name of |
@@ -212,7 +222,15 @@ AlienwareController::HidapiAlienwareReport AlienwareController::GetResponse()
     memset(result.data, 0x00, sizeof(result.data));
 
 
-    hid_get_feature_report(dev, result.data, HIDAPI_ALIENWARE_REPORT_SIZE);
+    int bytes_read = hid_get_feature_report(dev, result.data, HIDAPI_ALIENWARE_REPORT_SIZE);
+
+    /*-----------------------------------------------------*\
+    | Log the response for debugging                        |
+    \*-----------------------------------------------------*/
+    LOG_DEBUG("[%s] GetResponse: bytes_read=%d, data=[%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X ...]",
+              ALIENWARE_CONTROLLER_NAME, bytes_read,
+              result.data[0], result.data[1], result.data[2], result.data[3], result.data[4],
+              result.data[5], result.data[6], result.data[7], result.data[8], result.data[9]);
 
     return(result);
 }
@@ -351,6 +369,13 @@ bool AlienwareController::UserAnimation(uint16_t subcommand, uint16_t animation,
         case ALIENWARE_COMMAND_USER_ANIM_FINISH_SAVE:
             return(!response.data[7]);
         case ALIENWARE_COMMAND_USER_ANIM_FINISH_PLAY:
+            /*-----------------------------------------------------*\
+            | For Aurora R16, response might be different           |
+            \*-----------------------------------------------------*/
+            if(platform_id == 0x0810)
+            {
+                return(response.data[1] != 0);
+            }
             return(!response.data[5]);
         case ALIENWARE_COMMAND_USER_ANIM_PLAY:
             return(!response.data[7]);
@@ -648,6 +673,17 @@ void AlienwareController::UpdateDim()
     }
 
     /*-----------------------------------------------------*\
+    | Skip dim update if too many zones - buffer can only   |
+    | hold about 28 zone IDs (34 byte buffer - 6 header)    |
+    \*-----------------------------------------------------*/
+    if(zones.size() > 28)
+    {
+        LOG_WARNING("[%s] Skipping UpdateDim - too many zones (%zu) would overflow buffer", ALIENWARE_CONTROLLER_NAME, zones.size());
+        dirty_dim = false;
+        return;
+    }
+
+    /*-----------------------------------------------------*\
     | Collect all zones that share dim settings, and update |
     | them together                                         |
     \*-----------------------------------------------------*/
@@ -672,31 +708,6 @@ void AlienwareController::UpdateDim()
     dirty_dim = false;
 }
 
-bool AlienwareController::UpdateDirect()
-{
-    /*-----------------------------------------------------*\
-    | Collect all zones that share dim settings, and update |
-    | them together                                         |
-    \*-----------------------------------------------------*/
-    std::map<RGBColor, std::vector<uint8_t>> color_zone_map;
-
-    for(size_t i = 0; i < zones.size(); i++)
-    {
-        color_zone_map[zones[i].color[0]].emplace_back((uint8_t)i);
-    }
-
-    for(std::pair<const RGBColor, std::vector<uint8_t>> &pair : color_zone_map)
-    {
-        /*-------------------------------------------------*\
-        | Bail on an error...                               |
-        \*-------------------------------------------------*/
-        if(!SetColorDirect(pair.first, pair.second))
-        {
-            return false;
-        }
-    }
-    return true;
-}
 
 static const RGBColor rainbow_colors[4][7] =
 {
@@ -720,6 +731,7 @@ void AlienwareController::UpdateMode()
 
     if(!result)
     {
+        LOG_WARNING("[%s] UserAnimation(ALIENWARE_COMMAND_USER_ANIM_NEW) failed", ALIENWARE_CONTROLLER_NAME);
         return;
     }
 
@@ -731,6 +743,7 @@ void AlienwareController::UpdateMode()
 
         if(!result)
         {
+            LOG_WARNING("[%s] SelectZones for zone %d failed", ALIENWARE_CONTROLLER_NAME, zone_idx);
             return;
         }
 
@@ -814,18 +827,28 @@ void AlienwareController::UpdateMode()
 
         if(!result)
         {
+            LOG_WARNING("[%s] ModeAction for zone %d failed", ALIENWARE_CONTROLLER_NAME, zone_idx);
             return;
         }
     }
 
     result = UserAnimation(ALIENWARE_COMMAND_USER_ANIM_FINISH_PLAY, ALIENWARE_COMMAND_USER_ANIM_KEYBOARD, 0);
 
-    /*-------------------------------------------------*\
-    | Don't update dirty flag if there's an error       |
-    \*-------------------------------------------------*/
+    /*-----------------------------------------------------*\
+    | For Aurora R16, FINISH_PLAY might not respond the     |
+    | same way. Continue even if it fails.                  |
+    \*-----------------------------------------------------*/
     if(!result)
     {
-        return;
+        if(platform_id == 0x0810)
+        {
+            result = true;
+        }
+        else
+        {
+            LOG_WARNING("[%s] UserAnimation(ALIENWARE_COMMAND_USER_ANIM_FINISH_PLAY) failed", ALIENWARE_CONTROLLER_NAME);
+            return;
+        }
     }
 
     dirty = false;
@@ -833,6 +856,16 @@ void AlienwareController::UpdateMode()
 
 void AlienwareController::UpdateController()
 {
+    /*---------------------------------------------------------*\
+    | Use per-zone animation protocol for all devices           |
+    \*---------------------------------------------------------*/
     UpdateMode();
-    UpdateDim();
+
+    /*---------------------------------------------------------*\
+    | Skip dim for R16 - too many zones would overflow buffer   |
+    \*---------------------------------------------------------*/
+    if(platform_id != 0x0810)
+    {
+        UpdateDim();
+    }
 }

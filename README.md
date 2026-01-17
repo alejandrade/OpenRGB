@@ -1,8 +1,10 @@
-## ![OpenRGB](Documentation/Images/OpenRGB.png "OpenRGB Logo")
+\## ![OpenRGB](Documentation/Images/OpenRGB.png "OpenRGB Logo")
 
 ![Pipeline Status](https://gitlab.com/CalcProgrammer1/OpenRGB/badges/master/pipeline.svg)
 
 One of the biggest complaints about RGB is the software ecosystem surrounding it.  Every manufacturer has their own app, their own brand, their own style.  If you want to mix and match devices, you end up with a ton of conflicting, functionally identical apps competing for your background resources.  On top of that, these apps are proprietary and Windows-only.  Some even require online accounts.  What if there was a way to control all of your RGB devices from a single app, on Windows, Linux, and MacOS, without any nonsense?  That is what OpenRGB sets out to achieve.  One app to rule them all.
+
+> **⚠️ This Fork:** This fork includes support for **Alienware Aurora R16** RGB control. If you're searching for OpenRGB with Alienware R16 support, you're in the right place!
 
 ## Features
 

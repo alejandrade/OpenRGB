@@ -145,6 +145,7 @@ private:
     std::string                 serial_number;
     std::string                 version;
     std::vector<const char*>    zone_names;
+    uint32_t                    platform_id;
     bool                        dirty;
     bool                        dirty_dim;
 
@@ -158,6 +159,5 @@ private:
     bool                        ModeAction(const uint8_t *mode, const uint16_t *duration, const uint16_t *tempo, const RGBColor *color, unsigned amount);
     bool                        MultiModeAction(const uint8_t *mode, const uint16_t *duration, const uint16_t *tempo, const RGBColor *color, unsigned amount);
     bool                        SetColorDirect(RGBColor color, std::vector<uint8_t> zones);
-    bool                        UpdateDirect();
     bool                        Reset();
 };
